@@ -24,6 +24,7 @@
 #include "net/gnrc/netdev.h"
 #include "net/gnrc/netdev/ieee802154.h"
 #include "net/gnrc/lwmac/lwmac.h"
+#include "net/gnrc/contikimac/contikimac.h"
 #include "net/gnrc.h"
 
 #include "at86rf2xx.h"
@@ -64,6 +65,12 @@ void auto_init_at86rf2xx(void)
                             AT86RF2XX_MAC_STACKSIZE,
                             AT86RF2XX_MAC_PRIO,
                             "at86rf2xx-lwmac",
+                            &gnrc_adpt[i]);
+#elif defined MODULE_GNRC_CONTIKIMAC
+            gnrc_contikimac_init(_at86rf2xx_stacks[i],
+                            AT86RF2XX_MAC_STACKSIZE,
+                            AT86RF2XX_MAC_PRIO,
+                            "at86rf2xx-contikimac",
                             &gnrc_adpt[i]);
 #else
             gnrc_netdev_init(_at86rf2xx_stacks[i],

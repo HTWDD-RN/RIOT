@@ -30,6 +30,7 @@
 #include "net/ieee802154.h"
 #include "net/gnrc/mac/mac.h"
 #include "net/gnrc/lwmac/types.h"
+#include "net/gnrc/contikimac/types.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -159,6 +159,13 @@ typedef struct gnrc_netdev {
      */
     gnrc_lwmac_t lwmac;
 #endif
+    
+#ifdef MODULE_GNRC_CONTIKIMAC
+    /**
+     * @brief LWMAC specific structure object for storing LWMAC internal states.
+     */
+    gnrc_contikimac_t contikimac;
+#endif
 
 #endif /* MODULE_GNRC_MAC */
 } gnrc_netdev_t;
