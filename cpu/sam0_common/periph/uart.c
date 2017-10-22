@@ -57,6 +57,9 @@ int uart_init(uart_t uart, uint32_t baudrate, uart_rx_cb_t rx_cb, void *arg)
         return UART_NODEV;
     }
 
+    /* must disable here first to ensure idempotency */
+    dev(uart)->CTRLA.reg &= ~(SERCOM_USART_CTRLA_ENABLE);
+
     /* configure pins */
     gpio_init(uart_config[uart].rx_pin, GPIO_IN);
     gpio_init_mux(uart_config[uart].rx_pin, uart_config[uart].mux);
@@ -80,9 +83,11 @@ int uart_init(uart_t uart, uint32_t baudrate, uart_rx_cb_t rx_cb, void *arg)
                       SERCOM_USART_CTRLA_SAMPR(0x1) |
                       SERCOM_USART_CTRLA_TXPO(uart_config[uart].tx_pad) |
                       SERCOM_USART_CTRLA_RXPO(uart_config[uart].rx_pad) |
-                      SERCOM_USART_CTRLA_MODE(0x1) |
-                      (uart_config[uart].runstdby ?
-                              SERCOM_USART_CTRLA_RUNSTDBY : 0));
+                      SERCOM_USART_CTRLA_MODE(0x1));
+    /* Set run in standby mode if enabled */
+    if (uart_config[uart].flags & UART_FLAG_RUN_STANDBY) {
+        dev(uart)->CTRLA.reg |= SERCOM_USART_CTRLA_RUNSTDBY;
+    }
 
     /* calculate and set baudrate */
     uint32_t baud = ((((uint32_t)CLOCK_CORECLOCK * 10) / baudrate) / 16);
@@ -98,6 +103,10 @@ int uart_init(uart_t uart, uint32_t baudrate, uart_rx_cb_t rx_cb, void *arg)
         NVIC_EnableIRQ(SERCOM0_IRQn + sercom_id(dev(uart)));
         dev(uart)->CTRLB.reg |= SERCOM_USART_CTRLB_RXEN;
         dev(uart)->INTENSET.reg |= SERCOM_USART_INTENSET_RXC;
+        /* set wakeup receive from sleep if enabled */
+        if (uart_config[uart].flags & UART_FLAG_WAKEUP) {
+            dev(uart)->CTRLB.reg |= SERCOM_USART_CTRLB_SFDE;
+        }
     }
     while (dev(uart)->SYNCBUSY.reg & SERCOM_USART_SYNCBUSY_CTRLB) {}
 
@@ -112,8 +121,8 @@ void uart_write(uart_t uart, const uint8_t *data, size_t len)
     for (size_t i = 0; i < len; i++) {
         while (!(dev(uart)->INTFLAG.reg & SERCOM_USART_INTFLAG_DRE)) {}
         dev(uart)->DATA.reg = data[i];
-        while (dev(uart)->INTFLAG.reg & SERCOM_USART_INTFLAG_TXC) {}
     }
+    while (!(dev(uart)->INTFLAG.reg & SERCOM_USART_INTFLAG_TXC)) {}
 }
 
 void uart_poweron(uart_t uart)

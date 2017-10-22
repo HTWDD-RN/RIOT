@@ -184,6 +184,9 @@ static int _recv(netdev_t *netdev, void *buf, size_t len, void *info)
 static int _set_state(at86rf2xx_t *dev, netopt_state_t state)
 {
     switch (state) {
+        case NETOPT_STATE_STANDBY:
+            at86rf2xx_set_state(dev, AT86RF2XX_STATE_TRX_OFF);
+            break;
         case NETOPT_STATE_SLEEP:
             at86rf2xx_set_state(dev, AT86RF2XX_STATE_SLEEP);
             break;
@@ -209,6 +212,8 @@ netopt_state_t _get_state(at86rf2xx_t *dev)
     switch (at86rf2xx_get_status(dev)) {
         case AT86RF2XX_STATE_SLEEP:
             return NETOPT_STATE_SLEEP;
+        case AT86RF2XX_STATE_TRX_OFF:
+            return NETOPT_STATE_STANDBY;
         case AT86RF2XX_STATE_BUSY_RX_AACK:
             return NETOPT_STATE_RX;
         case AT86RF2XX_STATE_BUSY_TX_ARET:
@@ -288,6 +293,14 @@ static int _get(netdev_t *netdev, netopt_t opt, void *val, size_t max_len)
             *((netopt_enable_t *)val) =
                 !!(dev->netdev.flags & AT86RF2XX_OPT_CSMA);
             return sizeof(netopt_enable_t);
+
+/* Only radios with the XAH_CTRL_2 register support frame retry reporting */
+#if AT86RF2XX_HAVE_RETRIES
+        case NETOPT_TX_RETRIES_NEEDED:
+            assert(max_len >= sizeof(uint8_t));
+            *((uint8_t *)val) = dev->tx_retries;
+            return sizeof(uint8_t);
+#endif
 
         default:
             /* Can still be handled in second switch */
@@ -574,6 +587,12 @@ static void _isr(netdev_t *netdev)
                 at86rf2xx_set_state(dev, dev->idle_state);
                 DEBUG("[at86rf2xx] return to state 0x%x\n", dev->idle_state);
             }
+/* Only radios with the XAH_CTRL_2 register support frame retry reporting */
+#if AT86RF2XX_HAVE_RETRIES
+            dev->tx_retries = ( at86rf2xx_reg_read(dev, AT86RF2XX_REG__XAH_CTRL_2) &
+                                AT86RF2XX_XAH_CTRL_2__ARET_FRAME_RETRIES_MASK ) >>
+                              AT86RF2XX_XAH_CTRL_2__ARET_FRAME_RETRIES_OFFSET;
+#endif
 
             DEBUG("[at86rf2xx] EVT - TX_END\n");
 
