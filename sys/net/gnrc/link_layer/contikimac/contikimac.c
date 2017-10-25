@@ -1,7 +1,7 @@
 #include "periph/rtt.h"
 #include "net/gnrc/contikimac/contikimac.h"
 
-#define ENABLE_DEBUG    (1)
+#define ENABLE_DEBUG    (0)
 #include "debug.h"
 
 #ifndef LOG_LEVEL
@@ -20,7 +20,7 @@ kernel_pid_t contikimac_pid;
 
 bool packet_received;
 bool sending_broadcast;
-xtimer_t xtimer;
+xtimer_t timer1;
 
 static bool contikimac_send(gnrc_netdev_t *netdev, gnrc_pktsnip_t *pkt);
 static void contikimac_set_netdev_state(gnrc_netdev_t *gnrc_netdev, netopt_state_t devstate);
@@ -37,102 +37,115 @@ static void rtt_handler(uint32_t event, gnrc_netdev_t *gnrc_netdev);
  *
  * @return          	True, if the packet was successful transmitted.
  */
-//bool contikimac_send(gnrc_netdev_t *netdev, gnrc_pktsnip_t *pkt)
-//{
-//	//netdev->send(netdev, pkt);
-//	//return true;
-//	
-//	xtimer_ticks32_t transmission_start, now;
-//	//int status;
-//
-//	netdev->contikimac.state = GNRC_CONTIKIMAC_TRANSMITTING;
-//	transmission_start = xtimer_now();
-//	contikimac_set_netdev_state(netdev, NETOPT_STATE_IDLE);
-//	
-////	/* Disable Auto ACK */
-////	netopt_enable_t autoack = NETOPT_DISABLE;
-////	netdev->dev->driver->set(netdev->dev, NETOPT_AUTOACK, &autoack, sizeof(autoack));
-//	
-//	packet_received = false;
-//	DEBUG("[CONTIKIMAC] Sending packet!\n");
-//	
-//	do {
-//		/* Don't let the packet be released yet, we want to send it again */
-//		gnrc_pktbuf_hold(pkt, 1);
-//		
-//		/*status = */netdev->send(netdev, pkt);
-//		now = xtimer_now();
-//		xtimer_periodic_wakeup(&now, GNRC_CONTIKIMAC_INTER_PACKET_INTERVAL_US);
-//		now = xtimer_now();
-//		//DEBUG("[CONTIKIMAC] Packet sent! %i\n", status);
-//		
-//	} while(!packet_received && ((now.ticks32 - transmission_start.ticks32) < GNRC_CONTIKIMAC_STROBE_TIME));
-//	
-//	gnrc_pktbuf_release(pkt);
-////	contikimac_set_netdev_state(netdev, NETOPT_STATE_SLEEP);
-//	netdev->contikimac.state = GNRC_CONTIKIMAC_SLEEPING;
-//	
-//	DEBUG("[CONTIKIMAC] Sending packet done!\n");
-//	
-////	/* Enable Auto again */
-////	autoack = NETOPT_ENABLE;
-////	netdev->dev->driver->set(netdev->dev, NETOPT_AUTOACK, &autoack, sizeof(autoack));
-//	
-//	return true;
-//}
-//
-// Alle 25666 us, erster Aufruf dauert 10544 us, alle weiteren ~6838 us. 25656 us zwischen den Aufrufen.
 bool contikimac_send(gnrc_netdev_t *netdev, gnrc_pktsnip_t *pkt)
 {
-	static msg_t msg;
-	static xtimer_ticks32_t now1;
+	xtimer_ticks32_t transmission_start, now;
+
+	gnrc_contikimac_state_t old_state = netdev->contikimac.state;
+	netdev->contikimac.state = GNRC_CONTIKIMAC_TRANSMITTING;
 	
-	/* We are not already transmitting, so it must be the first strobe packet. */
-	if (netdev->contikimac.state != GNRC_CONTIKIMAC_TRANSMITTING) {
-		netdev->contikimac.state = GNRC_CONTIKIMAC_TRANSMITTING;
+	transmission_start = xtimer_now();
+	
+	/* Disable things that make packet sending slow. */
+	netopt_enable_t netop = NETOPT_DISABLE;
+	netdev->dev->driver->set(netdev->dev, NETOPT_AUTOACK, &netop, sizeof(netop));
+	netdev->dev->driver->set(netdev->dev, NETOPT_CSMA, &netop, sizeof(netop));
+	netdev->dev->driver->set(netdev->dev, NETOPT_TX_START_IRQ, &netop, sizeof(netop));
+	
+	packet_received = false;
+	DEBUG("[CONTIKIMAC] Sending packet!\n");
+	
+	do {
+		/* Don't let the packet be released yet, we want to send it again */
+		gnrc_pktbuf_hold(pkt, 1);
 		
-		/* check if the packet is for broadcast */
-		if (gnrc_netif_hdr_get_flag(pkt) & (GNRC_NETIF_HDR_FLAGS_BROADCAST | GNRC_NETIF_HDR_FLAGS_MULTICAST)) {
-			DEBUG("[CONTIKIMAC] We've got a broadcast packet.\n");
-			sending_broadcast = true;
-		} else {
-			DEBUG("[CONTIKIMAC] We've got a unicast packet.\n");
-			sending_broadcast = false;
-		}
+		//LED0_ON;
+		netdev->send(netdev, pkt);
+		//LED0_OFF;
 		
-		netdev->contikimac.strobe_start = xtimer_now();
-		packet_received = false;
-	} else { // DEBUG!
-		xtimer_ticks32_t now2 = xtimer_now();
-		DEBUG("[CONTIKIMAC] contikimac_send() %lu us between calls.\n", now2.ticks32 - now1.ticks32);
-	}
-	
-	gnrc_pktbuf_hold(pkt, 1);
-	
-	//xtimer_ticks32_t now = xtimer_now();
-	netdev->send(netdev, pkt); // 109 Bytes => 6803 us
-	//xtimer_ticks32_t now2 = xtimer_now();
-	//DEBUG("[CONTIKIMAC] Sending packet done! %lu\n", now2.ticks32 - now.ticks32); // -> 6803 us
-	
-	xtimer_ticks32_t now = xtimer_now();
-	
-	/* No ACK was received so far und strobe is not over now. Schedule the next packet. */
-	if ((!packet_received || sending_broadcast) && ((now.ticks32 - netdev->contikimac.strobe_start.ticks32) < GNRC_CONTIKIMAC_STROBE_TIME)) {
-		msg.type = GNRC_CONTIKIMAC_EVENT_SND_TYPE;
-		msg.content.ptr = pkt;
-		//msg_send(&msg, contikimac_pid);
-		//msg_send_to_self(&msg);
+		//now = xtimer_now();
+		LED0_ON;
+		//xtimer_periodic_wakeup(&now, GNRC_CONTIKIMAC_INTER_PACKET_INTERVAL_US);
+		xtimer_usleep(GNRC_CONTIKIMAC_INTER_PACKET_INTERVAL_US - 60);
+		LED0_OFF;
 		
-		xtimer_set_msg(&xtimer, 50000 /*GNRC_CONTIKIMAC_INTER_PACKET_INTERVAL_US*/, &msg, contikimac_pid);
-	} else {
-		gnrc_pktbuf_release(pkt);
-		netdev->contikimac.state = 0; // TODO: Set the right state.
-	}
+		now = xtimer_now();
+		//DEBUG("[CONTIKIMAC] Packet sent! %i\n", status);
+		
+	} while(!packet_received && ((now.ticks32 - transmission_start.ticks32) < GNRC_CONTIKIMAC_STROBE_TIME));
 	
-	now1 = xtimer_now(); // DEBUG!
+	gnrc_pktbuf_release(pkt);
+	netdev->contikimac.state = old_state;
+	
+	DEBUG("[CONTIKIMAC] Sending packet done!\n");
 	
 	return true;
 }
+
+/* Not so well working version of ContikiMACs sending procedure. This procedure schedules itselfe repeatedly
+ * using xtimer and IPC until all packets were send. */
+//
+// Alle 25666 us, erster Aufruf dauert 10544 us, alle weiteren ~6838 us. 25656 us zwischen den Aufrufen.
+//bool contikimac_send(gnrc_netdev_t *netdev, gnrc_pktsnip_t *pkt)
+//{
+//	LED0_ON;
+//	static msg_t msg;
+//	//static xtimer_ticks32_t now1;
+//	
+//	/* We are not already transmitting, so it must be the first strobe packet. */
+//	if (netdev->contikimac.state != GNRC_CONTIKIMAC_TRANSMITTING) {
+//		netdev->contikimac.state = GNRC_CONTIKIMAC_TRANSMITTING;
+//		
+//		/* check if the packet is for broadcast */
+//		if (gnrc_netif_hdr_get_flag(pkt) & (GNRC_NETIF_HDR_FLAGS_BROADCAST | GNRC_NETIF_HDR_FLAGS_MULTICAST)) {
+//			DEBUG("[CONTIKIMAC] We've got a broadcast packet.\n");
+//			sending_broadcast = true;
+//		} else {
+//			DEBUG("[CONTIKIMAC] We've got a unicast packet.\n");
+//			sending_broadcast = false;
+//		}
+//		
+//		/* Disable things that make packet sending slow. */
+//		netopt_enable_t netop = NETOPT_DISABLE;
+//		netdev->dev->driver->set(netdev->dev, NETOPT_AUTOACK, &netop, sizeof(netop));
+//		netdev->dev->driver->set(netdev->dev, NETOPT_CSMA, &netop, sizeof(netop));
+//		netdev->dev->driver->set(netdev->dev, NETOPT_TX_START_IRQ, &netop, sizeof(netop));
+//		
+//		netdev->dev->driver->set(netdev->dev, NETOPT_TX_END_IRQ, &netop, sizeof(netop));
+//		
+//		netdev->contikimac.strobe_start = xtimer_now();
+//		packet_received = false;
+//	} /*else { // DEBUG!
+//		xtimer_ticks32_t now2 = xtimer_now();
+//		DEBUG("[CONTIKIMAC] contikimac_send() %lu us between calls.\n", now2.ticks32 - now1.ticks32);
+//	}*/
+//	
+//	gnrc_pktbuf_hold(pkt, 1);
+//	
+//	//xtimer_ticks32_t now = xtimer_now();
+//	netdev->send(netdev, pkt); // 109 Bytes => 6803 us
+//	//xtimer_ticks32_t now2 = xtimer_now();
+//	//DEBUG("[CONTIKIMAC] Sending packet done! %lu\n", now2.ticks32 - now.ticks32); // -> 6803 us
+//	
+//	xtimer_ticks32_t now = xtimer_now();
+//	
+//	/* No ACK was received so far und strobe is not over now. Schedule the next packet. */
+//	if ((!packet_received || sending_broadcast) && ((now.ticks32 - netdev->contikimac.strobe_start.ticks32) < GNRC_CONTIKIMAC_STROBE_TIME)) {
+//		msg.type = GNRC_CONTIKIMAC_EVENT_SND_TYPE;
+//		msg.content.ptr = pkt;
+//		//msg_send(&msg, contikimac_pid);
+//		//msg_send_to_self(&msg);
+//		
+//		xtimer_set_msg(&timer1, GNRC_CONTIKIMAC_INTER_PACKET_INTERVAL_US, &msg, contikimac_pid);
+//	} else {
+//		gnrc_pktbuf_release(pkt);
+//		netdev->contikimac.state = 0; // TODO: Set the right state.
+//	}
+//	
+//	//now1 = xtimer_now(); // DEBUG!
+//	LED0_OFF;
+//	return true;
+//}
 
 void contikimac_set_netdev_state(gnrc_netdev_t *gnrc_netdev, netopt_state_t devstate)
 {
@@ -292,9 +305,9 @@ static void rtt_cb(void *arg)
     msg.type = GNRC_CONTIKIMAC_EVENT_RTT_TYPE;
     msg_send(&msg, contikimac_pid);
 
-//    if (sched_context_switch_request) {
-//        thread_yield();
-//    }
+    if (sched_context_switch_request) {
+        thread_yield();
+    }
 }
 
 //void xtimer_handler(gnrc_contikimac_xtimer_t *type, gnrc_netdev_t *gnrc_netdev)
@@ -319,7 +332,7 @@ void rtt_handler(uint32_t event, gnrc_netdev_t *gnrc_netdev)
     		
     		if (gnrc_netdev->contikimac.state != GNRC_CONTIKIMAC_TRANSMITTING && // If we are transmitting, postpone cca phase. 
     				contikimac_perform_cca_phase(gnrc_netdev->dev)) { // A packet was detected.
-    			LED0_TOGGLE;
+    			//LED0_TOGGLE;
     			contikimac_set_netdev_state(gnrc_netdev, NETOPT_STATE_IDLE);
     			alarm = rtt_get_counter() + GNRC_CONTIKIMAC_LISTEN_TIME_AFTER_PACKET_DETECTED;
     			rtt_set_alarm(alarm, rtt_cb, (void *) GNRC_CONTIKIMAC_EVENT_RTT_PACKET_DETECTED);
