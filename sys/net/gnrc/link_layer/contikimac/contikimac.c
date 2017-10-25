@@ -151,13 +151,14 @@ static void _event_cb(netdev_t *dev, netdev_event_t event)
                 }
             case NETDEV_EVENT_TX_COMPLETE:
             	DEBUG("[CONTIKIMAC] A packet was successfully transmitted.\n");
+            	packet_received = true;
+#ifdef MODULE_NETSTATS_L2
+				dev->stats.tx_success++;
+#endif
             	break;
 #ifdef MODULE_NETSTATS_L2
             case NETDEV_EVENT_TX_MEDIUM_BUSY:
                 dev->stats.tx_failed++;
-                break;
-            case NETDEV_EVENT_TX_COMPLETE:
-                dev->stats.tx_success++;
                 break;
 #endif
             default:
