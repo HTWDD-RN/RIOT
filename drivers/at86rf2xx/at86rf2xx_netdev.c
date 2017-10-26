@@ -35,7 +35,7 @@
 #include "at86rf2xx_internal.h"
 #include "at86rf2xx_registers.h"
 
-#define ENABLE_DEBUG (1)
+#define ENABLE_DEBUG (0)
 #include "debug.h"
 
 #define _MAX_MHR_OVERHEAD   (25)
@@ -559,7 +559,6 @@ static void _isr(netdev_t *netdev)
 
     /* read (consume) device status */
     irq_mask = at86rf2xx_reg_read(dev, AT86RF2XX_REG__IRQ_STATUS);
-    DEBUG("[at86rf2xx] IRQ mask is %u.\n", irq_mask);
 
     trac_status = at86rf2xx_reg_read(dev, AT86RF2XX_REG__TRX_STATE) &
                   AT86RF2XX_TRX_STATE_MASK__TRAC;
